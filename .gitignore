@@ -35,3 +35,6 @@ supabase/.temp/
 
 # Assessment brief (kept local)
 *.pdf
+
+# Video build artefacts
+.video-build/

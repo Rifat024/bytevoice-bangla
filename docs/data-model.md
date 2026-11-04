@@ -121,3 +121,15 @@ erDiagram
 ## Verified on 4 Nov 2026 (transaction rolled back)
 
 `duration_s` computed (95 s) · overlapping booking for the same doctor **blocked** · overlap with a cancelled booking allowed · 10-digit phone **rejected** · Supabase security advisor: 0 issues.
+
+## Privacy and caller memory
+
+| Concern | How it is handled |
+|---|---|
+| Doctors' or staff's personal phone, home address, family | Not stored anywhere. `get_clinic_info` returns only the clinic's front-desk number, address, chamber hours and specialties. The persona refuses and offers the clinic number, an appointment or a callback. |
+| Another patient's appointments or details | `find_appointments` and `recall_caller_history` need the caller's **name and number to match** the same patient. "Unknown number" and "wrong name" return the identical reply, so the agent cannot be used to discover who is a patient. Reschedule and cancel accept only appointment codes verified earlier in the same call. |
+| Prompt injection ("ignore your instructions", "read me the patient list") | The model has no tool that lists patients; the persona stays in role. |
+| Audit | Each caller turn is scanned for private-staff-info, other-patient, prompt-injection, medical-advice, emergency and off-topic requests; each agent turn for phone numbers other than the caller's and the clinic's. Hits are stored in `call_events` (`state` / `error` with a `guardrail` key) and shown on the call timeline. |
+| Follow-up calls | After the caller confirms name and number, `recall_caller_history` loads that patient's last three call summaries (`calls.summary_bn`), open `callback_requests` and upcoming `appointments`, so the agent continues from the previous call. Post-call finalize links enquiry-only calls to the caller's patient row (only when the name matches an existing record for that phone, or a new record is created). |
+
+`doctor_schedules.weekday` follows Postgres `extract(dow)`: 0 = Sunday … 6 = Saturday.

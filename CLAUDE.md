@@ -3,9 +3,9 @@
 Deadline: **Thu 5 Nov 2026, 23:59 BST (UTC+6)**. Target finish 21:00 BST.
 
 ## Start of every session
-1. Read `README.md` in full. It is the build playbook and the single source of truth.
+1. Read `docs/BUILD_PLAYBOOK.md` in full. It is the build playbook and the single source of truth (`README.md` is the reviewer-facing submission README).
 2. Go to **§12 Progress checklist** and continue from the first unchecked item. Do not redo ticked items.
-3. The original brief is `StrategyByte_AI_Engineer_Task_Brief.pdf` (read it natively with the Read tool if anything in the README is unclear).
+3. The original brief is `StrategyByte_AI_Engineer_Task_Brief.pdf` (read it natively with the Read tool if anything in the playbook is unclear).
 
 ## While working
 - Tick `[x]` in §12 as soon as an item is done, and append a row to the **Session log** before ending a session (what changed, what's next, blockers).
