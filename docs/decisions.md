@@ -17,3 +17,19 @@ Fill in after running the test script in README §3 (scores 1–5).
 | gemini_hybrid | | | | | | | | |
 | openai_hybrid | | | | | | | | |
 | gemini_native (reference) | | | | | | | | |
+
+## Free-tier-only rule (owner requirement)
+
+Every service must run on a free tier; no paid usage.
+
+| Service | Free tier used | Watch out for |
+|---|---|---|
+| Google AI Studio (Gemini 2.5 Flash / Live) | Free API key | Per-minute request limits; fall back to `gemini-2.5-flash-lite` if a call hits 429 |
+| Azure Speech | F0 resource, Southeast Asia | Monthly audio-hour (STT) and character (TTS) caps; keep the 5-min call cap |
+| LiveKit Cloud | Build (free) plan | Monthly agent-session minutes; `openai_hybrid` only through LiveKit Inference included credits, never a paid OpenAI key |
+| Supabase | Free project (Singapore) | Project pauses after a week idle; keep it active until assessment ends |
+| Vercel | Hobby | None for this demo |
+| GitHub | Free private repo | Add reviewers as collaborators or make public at submission |
+| Agent hosting | LiveKit Cloud agent deploy (free plan) or Render free web service + uptime ping | Render free sleeps when idle |
+
+`OPENAI_API_KEY` stays empty. `openai_native` / direct OpenAI are not used.
