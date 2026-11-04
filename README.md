@@ -397,10 +397,11 @@ The worker injects `{now_dhaka}` and the clinic facts at session start. Silence 
 - [x] Choose architecture and stack (§2); write this playbook and `CLAUDE.md`
 
 ### P0 Setup & bake-off
-- [ ] `git init`; create GitHub repo `bytevoice-bangla` (private; add reviewers later, or make public at submission)
-- [ ] Create the monorepo skeleton (§13 commands), `.gitignore`, `.env.example` files
+- [x] `git init`; create GitHub repo `bytevoice-bangla` (private; add reviewers later, or make public at submission): https://github.com/Rifat024/bytevoice-bangla
+- [x] Create the monorepo skeleton (§13 commands), `.gitignore`, `.env.example` files (agent done; `apps/web` is created in P3)
 - [ ] Accounts and keys ready (§13): Supabase (Singapore), LiveKit Cloud, Google AI Studio, Azure Speech (F0), Vercel; OpenAI optional
-- [ ] Minimal agent worker running locally, joinable from the LiveKit Agents Playground
+- [x] Minimal agent worker (`apps/agent/src/agent/worker.py`, engines in `engines.py`, persona in `prompts/persona.py`); CLI verified, silero files downloaded
+- [ ] Owner creates `apps/agent/.env.local` from `.env.example` (git-ignored) with Google + Azure keys; smoke-test `uv run python -m agent.worker console`
 - [ ] Bake-off of the 3 Azure-voiced engines with the test script; scores written to `docs/decisions.md`; `VOICE_ENGINE` default set
 
 ### P1 Data + agent skeleton
@@ -451,6 +452,7 @@ The worker injects `{now_dhaka}` and the clinic facts at session start. Silence 
 | Date (BST) | Account / session | Done | Next | Blockers |
 |---|---|---|---|---|
 | 2026-11-04 | Planning session | Brief digested; playbook + CLAUDE.md written | P0 setup & bake-off | Need API keys / accounts |
+| 2026-11-04 | Planning session (P0) | Tools installed (uv, pnpm, supabase, lk); agent scaffold with 5 engines; voice fixed to Azure `bn-BD` (owner wants native Bangladeshi voice); clinic switched to One Smile Dental (demo values); private repo pushed | Owner adds keys to `apps/agent/.env.local` → console smoke test → bake-off | Google AI Studio key, Azure Speech F0 key, LiveKit Cloud project |
 
 ---
 
