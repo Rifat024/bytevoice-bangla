@@ -20,6 +20,18 @@ class AgentSettings(BaseSettings):
     pipeline_tts_model: str = "gemini-3.8-flash-tts"
     pipeline_tts_voice: str = "Aoede"
 
+    extraction_model: str = "gemini-2.5-flash"
+    extraction_fallback_model: str = "gemini-2.5-flash-lite"
+    google_api_key: str = ""
+
+    supabase_url: str = ""
+    supabase_service_role_key: str = ""
+    clinic_id: str = "a7c1e5d2-1b3f-4c8e-9d20-5e6f7a8b9c01"
+
+    internal_api_token: str = ""
+    allowed_origins: str = "http://localhost:3000"
+    user_away_timeout_seconds: float = 8.0
+
 
 @lru_cache
 def get_settings() -> AgentSettings:
