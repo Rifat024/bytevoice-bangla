@@ -1,570 +1,99 @@
-# ByteVoice Bangla — Build Playbook
+# ByteVoice Bangla
 
-> **Working title:** ByteVoice Bangla, StrategyByte's AI receptionist for Bangladeshi dental clinics and hospitals.
-> **Purpose of this file:** the single source of truth for building the StrategyByte AI Engineer take-home.
-> Any Claude Code session, on any account, can pick up the work from here. Start at
-> [§12 Progress checklist](#12-progress-checklist-resume-here) and continue from the first unchecked box.
->
-> **Deadline: Thursday 5 November 2026, 23:59 BST (UTC+6).** Aim to finish by 21:00 BST, which leaves three hours of buffer.
->
-> This file becomes the submission README in Phase 6. The playbook then moves to `docs/BUILD_PLAYBOOK.md`.
+**An AI receptionist that answers a Bangladeshi clinic's phone in natural Dhaka Bangla, books appointments into a real database, and shows every call to staff within a minute.**
 
----
+Built for the StrategyByte AI Engineer task. Demo clinic: One Smile Dental Lounge, Uttara (public info; hours, fees and two doctors are demo values; not affiliated). All patient data is fake.
 
-## 1. Brief digest
-
-Source: `StrategyByte_AI_Engineer_Task_Brief.pdf` (in this folder) and the HR email "AI Engineer Role: Task Brief and Submission Details" (4 Nov 2026).
-
-StrategyByte (an Australian company, product **ByteVoice**) is launching in Bangladesh. We need to build a working demo **end to end**:
-
-| Part | Component | Must have |
-|---|---|---|
-| A | Landing page | At least 3 sections, with the **hero as the main focus**. Responsive, deployed publicly. **3D in the hero = plus.** Bilingual toggle = plus. |
-| B | Hero CTA | A prominent **"Talk to our Bangla caller"** button that starts a live **browser** voice call (mic permission, WebRTC/web SDK). Shows the *connecting / live / ended* states and handles mic-permission and connection errors gracefully. |
-| C | Bangla caller | Natural colloquial Bangla receptionist for a clinic. Handles code-switching (Bangla and English), numbers, dates and times, and Bangladeshi names. Flow: greet → name (confirm) → phone (read back digit by digit) → reason → preferred date/time ("next Sunday evening") → book or answer the enquiry → decline out-of-scope requests (medical advice) and offer a human callback → close with a summary. |
-| D | Data portal | Login (reviewer credentials go in the submission). Call list: date, time, caller, duration, status; searchable/filterable. Per-call view: extracted fields (name, phone, reason, preferred date/time, outcome), full transcript with speaker labels and timestamps, and status (booked / enquiry / follow-up needed / incomplete / failed). Show **how the data is organised, structured and stored**. |
-
-**What success looks like (our acceptance test):** the reviewer opens the landing page, clicks the hero button, books a dental appointment in Bangla and hangs up. They then log in to the portal and, **within 1–2 minutes**, see that call, its transcript and the patient's details neatly organised.
-
-**Evaluation weights:** Bangla caller quality **30%** · Data structure & portal **25%** · Hero & landing design **20%** · Code quality & architecture **15%** · Docs & presentation **10%**.
-
-**Assessed on the caller:** natural Bangla (not literal translation), low latency, smooth turn-taking including interruptions, accurate capture of names, numbers, dates and times, recovery from mishearing, silence and mixed Bangla/English, confirmation before booking, and safe behaviour (no medical advice, no invented information).
-
-**Be ready to explain:** the schema and its relationships; where data is stored (DB, region, recordings); how data moves from the live call into storage; how extracted fields are validated (Bangla digits, phone formats); why each provider was chosen.
-
-**Rules:** any tools or AI assistants are allowed; free tiers are fine. Use **fake patient data only**. **No secrets in the repo.** Keep everything live until the assessment is complete. Be honest about what is incomplete: a solution that works end to end beats a polished one that only partly works.
-
-**Submission:** email `hr@strategybyte.com.au` with the subject `AI Engineer Task Submission: Rifat Bin Siraj` and 4 links: landing page, portal (plus reviewer login), GitHub repo (make sure they have access), and the video (≤3 min).
-
----
-
-## 2. Architecture
-
-```
-┌────────────────────────── Browser ──────────────────────────┐
-│ Next.js 15 (Vercel)                                         │
-│  • Landing + 3D audio-reactive orb (React Three Fiber)      │
-│  • Call widget (livekit-client)  ──── WebRTC audio ───┐     │
-│  • Portal (Supabase Auth + Realtime)                  │     │
-└───────┬───────────────────────────────────────────────┼─────┘
-        │ POST /api/livekit/token                       │
-        │ (rate-limited, 10-min TTL, dispatches agent)  ▼
-        │                                     ┌──────────────────┐
-        │                                     │ LiveKit Cloud    │
-        │                                     │ (SFU + rooms)    │
-        │                                     └────────┬─────────┘
-        │                                              │ agent joins room
-        │                         ┌────────────────────▼─────────────────────┐
-        │                         │ apps/agent  (Python 3.12)                │
-        │                         │  • livekit-agents 1.x worker             │
-        │                         │    VOICE_ENGINE = azure_pipeline |       │
-        │                         │      gemini_hybrid | openai_hybrid       │
-        │                         │  • function tools → validators           │
-        │                         │  • live persistence (turns, events)      │
-        │                         │  • FastAPI: /health, post-call           │
-        │                         │    extraction, /calls/{id}/reprocess     │
-        │                         └────────────────────┬─────────────────────┘
-        │                                              │ service-role writes
-        ▼                                              ▼
-┌──────────────────────────────────────────────────────────────┐
-│ Supabase (region ap-southeast-1, Singapore: closest to BD)   │
-│  Postgres (schema §4) · Auth (staff/reviewer) · Realtime     │
-│  Storage bucket `recordings` (private, signed URLs; stretch) │
-└──────────────────────────────────────────────────────────────┘
-```
-
-**Why this stack (keep these lines for the README and the interview):**
-- **LiveKit Agents (Python):** production-grade WebRTC, VAD and interruption handling, turn detection, transcription events and function tools. The LLM/voice engine swaps with one line, which makes the bake-off cheap and the "provider choice" story concrete. ByteVoice-class products are built this way.
-- **Azure Neural TTS `bn-BD` voice (fixed):** the only major provider with Bangladesh-locale neural voices, so the caller sounds local rather than Kolkata. Azure STT `bn-BD` + `en-US` multi-language recognition handles code-switching.
-- **Gemini (2.5 Flash or Live) as the brain:** strong Bangla understanding and tool calling, free in Google AI Studio. Chosen per the bake-off.
-- **Python agent server:** the AI-engineering depth lives here: tools, validators, extraction, evals.
-- **Supabase in Singapore:** managed Postgres with real constraints, Auth for the portal login, and Realtime so the portal updates **while the call is happening**. Singapore is the nearest region to Dhaka.
-- **Next.js on Vercel:** one deploy for the landing page and the portal, with server components for authenticated portal reads.
-
----
-
-## 3. Phase 0: Voice-engine bake-off (30–45 min, do this first)
-
-**Hard requirement from the owner: the agent must speak native Bangladeshi Bangla, not Indian/Kolkata Bangla.**
-So the **output voice is fixed**: Azure Neural TTS with the Bangladesh locale, `bn-BD-NabanitaNeural` (female, default) or `bn-BD-PradeepNeural` (male). The bake-off only chooses the **"ears + brain"** (speech understanding and the LLM). Native-audio realtime voices (Gemini/OpenAI) are kept only as a comparison, because their Bangla accent is generic or West-Bengal-leaning.
-
-Engines are implemented in `apps/agent/src/agent/engines.py` and switched with `VOICE_ENGINE`:
-
-| `VOICE_ENGINE` | Ears | Brain | Voice | Notes |
-|---|---|---|---|---|
-| `azure_pipeline` **(default)** | Azure STT, languages `["bn-BD","en-US"]` (auto-detects code-switching) + phrase list (doctor names, scaling, root canal…) | Gemini 2.5 Flash | Azure `bn-BD` | Fully Bangladeshi, all free tiers; most control; slightly higher latency |
-| `gemini_hybrid` | Gemini Live (hears audio directly) | Gemini Live, text output | Azure `bn-BD` | Realtime comprehension + BD voice. Needs a **non-native-audio** Live model (`GEMINI_HYBRID_MODEL`); verify the current id |
-| `openai_hybrid` | OpenAI Realtime via LiveKit Inference | same, text output | Azure `bn-BD` | Uses LiveKit Cloud credits, so no OpenAI key needed |
-| `gemini_native` | Gemini Live | Gemini Live | Gemini voice | Comparison only (accent) |
-| `openai_native` | OpenAI Realtime | same | OpenAI voice | Comparison only (accent) |
-
-**Fastest way to test (no LiveKit needed):** `cd apps/agent && VOICE_ENGINE=<engine> uv run python -m agent.worker console` talks through your Mac mic and speakers (use headphones). **Or** run `... agent.worker dev`, then talk to it from https://agents-playground.livekit.io (sign in with LiveKit Cloud and pick the project; the agent name is `bytevoice-bn`, so use explicit dispatch in the playground settings).
-
-**Test script (speak it; log the scores in `docs/decisions.md`):**
-1. "আসসালামু আলাইকুম, আমি একটা appointment নিতে চাই, দাঁতে খুব ব্যথা।"
-2. Name: "আমার নাম তাহমিনা আক্তার"
-3. Phone, mixed: "জিরো ওয়ান সেভেন, ডাবল পাঁচ, তিন দুই এক, নাইন এইট সেভেন" → expect a digit-by-digit read-back of `01755321987`. Then give a 10-digit number and expect "please repeat".
-4. "আগামী রবিবার সন্ধ্যার দিকে হবে? রুহান স্যারের কাছে root canal করাতে চাই।"
-5. Interrupt the agent mid-sentence.
-6. "এই ব্যথার জন্য কোন ওষুধ খাবো?" → expect a polite decline plus a callback offer.
-7. Stay silent for 10 s.
-
-**Score 1–5 on each:** sounds Bangladeshi · natural colloquial phrasing · understood code-switching · digit accuracy · understood the names (রুহান, তাহমিনা) · first-audio latency (target < 1.2 s) · barge-in smoothness.
-
-**Decision rule:** highest total among the three Azure-voiced engines, with ties broken by latency. Record the result and set the default in `.env`.
-
-## 4. Data model (first-class deliverable)
-
-File: `supabase/migrations/<ts>_init_schema.sql`. Render an ERD (Mermaid) in `docs/data-model.md` **and** on the portal's Data Model page.
-
-```sql
-create extension if not exists btree_gist;
-
-create type call_status    as enum ('in_progress','completed','failed');
-create type call_outcome   as enum ('booked','rescheduled','cancelled','enquiry','follow_up_needed','incomplete','failed');
-create type speaker_role   as enum ('agent','caller');
-create type appt_status    as enum ('booked','rescheduled','cancelled','completed','no_show');
-create type callback_status as enum ('open','in_progress','done');
-
-create table clinics (
-  id uuid primary key default gen_random_uuid(),
-  name_bn text not null, name_en text not null,
-  address_bn text, address_en text, phone text, map_url text,
-  timezone text not null default 'Asia/Dhaka',
-  opening_hours jsonb not null,           -- {"sat":["09:00","21:00"], ... "fri":null}
-  created_at timestamptz not null default now()
-);
-
-create table doctors (
-  id uuid primary key default gen_random_uuid(),
-  clinic_id uuid not null references clinics(id),
-  full_name_bn text not null, full_name_en text not null,
-  specialty_bn text, specialty_en text, active boolean not null default true
-);
-
-create table services (
-  id uuid primary key default gen_random_uuid(),
-  clinic_id uuid not null references clinics(id),
-  code text not null,                     -- 'checkup','scaling','root_canal','filling','extraction','braces_consult'
-  name_bn text not null, name_en text not null,
-  duration_min int not null, fee_bdt int not null,
-  prep_notes_bn text, prep_notes_en text,
-  unique (clinic_id, code)
-);
-
-create table doctor_schedules (
-  id uuid primary key default gen_random_uuid(),
-  doctor_id uuid not null references doctors(id),
-  weekday smallint not null check (weekday between 0 and 6),   -- 0 = Sunday
-  start_time time not null, end_time time not null
-);
-
-create table patients (
-  id uuid primary key default gen_random_uuid(),
-  full_name_bn text, full_name_en text,
-  phone_e164 text unique check (phone_e164 ~ '^\+8801[3-9][0-9]{8}$'),
-  created_at timestamptz not null default now()
-);
-
-create table calls (
-  id uuid primary key default gen_random_uuid(),
-  clinic_id uuid not null references clinics(id),
-  patient_id uuid references patients(id),
-  room_name text unique not null,
-  channel text not null default 'web',
-  engine text not null,
-  started_at timestamptz not null default now(),
-  ended_at timestamptz,
-  duration_s int generated always as (extract(epoch from (ended_at - started_at))::int) stored,
-  status call_status not null default 'in_progress',
-  outcome call_outcome,
-  after_hours boolean not null default false,
-  summary_bn text, summary_en text,
-  recording_path text
-);
-
-create table transcript_turns (
-  id bigserial primary key,
-  call_id uuid not null references calls(id) on delete cascade,
-  seq int not null,
-  speaker speaker_role not null,
-  text_bn text not null,
-  text_en text,
-  offset_ms int not null,
-  interrupted boolean not null default false,
-  unique (call_id, seq)
-);
-
-create table call_extractions (
-  call_id uuid primary key references calls(id) on delete cascade,
-  intent text,                             -- book | reschedule | cancel | enquiry | other
-  patient_name_bn text, patient_name_en text, name_confirmed boolean,
-  phone_spoken_raw text, phone_e164 text, phone_valid boolean,
-  reason_for_visit text, service_code text,
-  preferred_date date, preferred_time_window text,   -- morning | afternoon | evening | HH:MM
-  confidence jsonb,                        -- per-field 0..1
-  extractor_model text, extracted_at timestamptz not null default now()
-);
-
-create table appointments (
-  id uuid primary key default gen_random_uuid(),
-  clinic_id uuid not null references clinics(id),
-  patient_id uuid not null references patients(id),
-  doctor_id uuid not null references doctors(id),
-  service_id uuid not null references services(id),
-  call_id uuid references calls(id),
-  slot tstzrange not null,
-  status appt_status not null default 'booked',
-  created_at timestamptz not null default now(),
-  exclude using gist (doctor_id with =, slot with &&) where (status in ('booked','rescheduled'))
-);
-
-create table callback_requests (
-  id uuid primary key default gen_random_uuid(),
-  call_id uuid not null references calls(id),
-  patient_id uuid references patients(id),
-  reason text not null,
-  priority smallint not null default 2,
-  status callback_status not null default 'open',
-  created_at timestamptz not null default now()
-);
-
-create table call_events (
-  id bigserial primary key,
-  call_id uuid not null references calls(id) on delete cascade,
-  ts timestamptz not null default now(),
-  type text not null,                      -- tool_call | tool_result | error | latency | state
-  payload jsonb not null
-);
-
-create index on calls (started_at desc);
-create index on calls (outcome);
-create index on transcript_turns (call_id, seq);
-create index on appointments (patient_id);
-```
-
-**RLS:** enable on all tables. `authenticated` gets **select** on everything (staff portal). `anon` gets nothing. Only the Python service writes, using the **service-role key** held server-side. Add the tables `calls`, `transcript_turns` and `call_events` to the `supabase_realtime` publication.
-
-**Seed (`supabase/seed.sql`, fake data only):** 1 clinic modelled on the real **One Smile Dental Lounge** (ওয়ান স্মাইল ডেন্টাল লাউঞ্জ, House 30, Sector 11, Uttara, Dhaka, opposite Zamzam Tower; reference: https://www.facebook.com/OneSmileDL/). Lead doctor from the public page: ডা. মোঃ মুশফিকুর রুহান (micro-endodontist & aesthetic dentist); two more doctors are fictional (ডা. নুসরাত জাহান, ডা. রাকিব হাসান). Hours (Sat–Thu 10:00–21:00, Fri closed) and fees are **demo values**, not the clinic's real ones; label the landing page and portal "Demo, not affiliated with One Smile Dental". 7 services with BDT fees, weekly schedules, and the reviewer auth user (created via the Supabase Admin API or dashboard; the password goes only in the submission email).
-
-**Talking points:** normalised patients (phone is the natural key, stored as E.164) · calls and turns are append-only · extractions are separate from raw transcripts (re-runnable with `/calls/{id}/reprocess`) · **double booking is impossible at the DB level** (gist exclusion) · events table = audit trail and latency metrics · enums give the portal clean filters.
-
----
-
-## 5. Data flow (live call → storage → portal)
-
-1. The visitor clicks the hero CTA → `POST /api/livekit/token` (Next route). It rate-limits per IP, creates the room `call-<uuid>`, and returns a token with a **10-min TTL** that has `RoomAgentDispatch(agent_name="bytevoice-bn")`.
-2. The browser joins the room and publishes the mic. The agent worker joins on dispatch.
-3. On session start the agent inserts a `calls` row (`in_progress`, `engine`, `after_hours`, computed in Asia/Dhaka).
-4. On every final user or agent transcription (`conversation_item_added` / transcription events) the agent inserts a `transcript_turns` row with its `offset_ms`. The portal subscribes via Realtime, so the call appears **live**.
-5. Tool calls → validators → DB writes (`patients` upsert, `appointments`, `callback_requests`). Each tool call and its result is logged to `call_events`, along with per-turn latency (end of user speech → first agent audio).
-6. On disconnect, or the `end_call` tool, or the **5-min cap**, the agent sets `ended_at`, then calls the FastAPI `POST /calls/{id}/finalize`. That runs Gemini 2.5 Flash (text) with a **JSON schema** over the transcript to produce `call_extractions`, `summary_bn`/`summary_en`, English `text_en` per turn and the final `outcome`. The validators re-check all fields before writing; if they disagree with the tool data, the tool data wins and the disagreement is flagged in `confidence`.
-7. If finalize fails, the call stays `completed` with outcome `incomplete` and an error event, and staff can press **Reprocess** in the portal.
-
-**Tool contract (agent function tools):**
-
-| Tool | Args | Behaviour |
-|---|---|---|
-| `get_clinic_info` | `topic: hours\|location\|services\|fees\|preparation\|doctors` | Returns DB facts only (bn + en). |
-| `check_availability` | `date_text`, `time_hint?`, `service_code?`, `doctor_name?` | Resolves the relative date in Asia/Dhaka, validates against opening hours and schedules, returns up to 3 free slots. |
-| `book_appointment` | `patient_name_bn`, `phone_spoken`, `service_code`, `doctor_id`, `slot_start_iso`, `confirmed: bool` | Rejects if `confirmed` is false, the phone is invalid or the slot is taken (handles the exclusion-violation error). Upserts the patient. |
-| `find_appointments` | `phone_spoken` | Returns the caller's upcoming appointments (for reschedule/cancel). |
-| `reschedule_appointment` | `appointment_id`, `new_slot_start_iso`, `confirmed` | Atomic: cancel and rebook in one transaction. |
-| `cancel_appointment` | `appointment_id`, `confirmed` | Sets the status to `cancelled`. |
-| `request_human_callback` | `reason`, `priority` | Creates a `callback_requests` row. |
-| `end_call` | `summary_bn` | Agent says goodbye, then disconnects. |
-
----
-
-## 6. Validation layer (`apps/agent/src/agent/normalize/`, pytest-covered)
-
-- `digits.py`: Bangla digits `০১২৩৪৫৬৭৮৯` → ASCII. Spoken digit words in Bangla (শূন্য, এক, দুই … নয়) and English (zero/oh, one … nine), plus **"ডাবল/double X"** and **"ট্রিপল/triple X"** → digit string.
-- `phone.py`: strip spaces and dashes; accept `+880`, `880` and `0` prefixes; validate `^01[3-9]\d{8}$` (operator prefixes 013–019); output E.164 `+8801XXXXXXXXX` plus a Bangla read-back string grouped as `০১৭১১ – ২৩৪ – ৫৬৭` (spoken digit by digit).
-- `dates.py`: resolves "আজ, কাল/আগামীকাল, পরশু, আগামী <weekday>, এই <weekday>, next <weekday>, <n> তারিখ, <day> <month>" plus time hints "সকাল/দুপুর/বিকেল/সন্ধ্যা/রাত" and "সাড়ে/পৌনে/সোয়া <n>টা" in **Asia/Dhaka**. Rejects past dates and Fridays (closed), and snaps to opening hours.
-- `names.py`: stores the Bangla script as spoken, plus a simple transliteration for `full_name_en` (the LLM proposes one and it is stored; no hard validation beyond non-empty and length).
-- **Confirmation gate:** the agent must read back name → phone (digit by digit) → service → date/time and hear an explicit yes (হ্যাঁ / জি / ঠিক আছে / yes) before `book_appointment(confirmed=true)`. The tool itself refuses `confirmed=false`.
-
----
-
-## 7. Agent persona & system prompt (draft; refine during bake-off)
-
-Persona: **"নীলা" (Nila)**, receptionist at **ওয়ান স্মাইল ডেন্টাল লাউঞ্জ, উত্তরা**. Warm, polite, efficient. Uses the respectful আপনি form and everyday Dhaka Bangla, not textbook (সাধু) style. Keeps English loanwords patients actually use (appointment, doctor, scaling, root canal, filling, X-ray, fees, serial).
-
-```text
-তুমি "নীলা", ওয়ান স্মাইল ডেন্টাল লাউঞ্জ (উত্তরা, ঢাকা)-র রিসেপশনিস্ট। ফোনে রোগীদের সাথে কথা বলছ।
-
-কথার ধরন:
-- সবসময় আপনি সম্বোধন, ভদ্র কিন্তু স্বাভাবিক ঢাকার কথ্য বাংলা। বইয়ের ভাষা বা সাধু ভাষা না।
-- ছোট ছোট বাক্য, এক টার্নে একটাই প্রশ্ন।
-- রোগী ইংরেজি শব্দ মিশিয়ে বললে (appointment, scaling, root canal) তুমিও সেই শব্দগুলো স্বাভাবিকভাবে ব্যবহার করবে।
-- রোগী পুরোপুরি ইংরেজিতে কথা বললে ইংরেজিতে উত্তর দেবে।
-
-কাজের ধারা:
-1. সালাম দিয়ে ক্লিনিকের নাম বলে জিজ্ঞেস করো কীভাবে সাহায্য করতে পারো।
-2. নাম জিজ্ঞেস করে আবার বলে নিশ্চিত করো।
-3. মোবাইল নম্বর নাও, তারপর প্রতিটি সংখ্যা আলাদা করে পড়ে শুনিয়ে নিশ্চিত করো। ১১ সংখ্যা না হলে আবার জিজ্ঞেস করো।
-4. সমস্যা বা কোন সেবা লাগবে জেনে নাও।
-5. পছন্দের দিন ও সময় জেনে check_availability দিয়ে খালি সময় দেখো, সর্বোচ্চ ৩টা অপশন বলো।
-6. বুক করার আগে নাম, নম্বর, সেবা, ডাক্তার, দিন-সময় একসাথে বলে "ঠিক আছে?" জিজ্ঞেস করো; হ্যাঁ বললে তবেই book_appointment।
-7. শেষে সংক্ষেপে কী ঠিক হলো বলে ধন্যবাদ জানিয়ে end_call।
-
-কঠোর নিয়ম:
-- কোনো ওষুধ, ডোজ, রোগ নির্ণয় বা চিকিৎসা পরামর্শ দেবে না। বিনয়ের সাথে বলবে এটা ডাক্তার দেখে বলবেন, এবং চাইলে ডাক্তারের কলব্যাকের ব্যবস্থা করবে (request_human_callback)।
-- ফি, সময়, ডাক্তার, ঠিকানা: শুধু টুলের দেওয়া তথ্য বলবে, কখনো বানিয়ে বলবে না। না জানলে কলব্যাক অফার করবে।
-- জরুরি অবস্থা (প্রচুর রক্তপাত, মুখ ফুলে শ্বাসকষ্ট) শুনলে সাথে সাথে নিকটস্থ হাসপাতালের জরুরি বিভাগে যেতে বলবে বা ৯৯৯-এ কল করতে বলবে।
-- কিছু বুঝতে না পারলে আন্দাজ করবে না; ভদ্রভাবে আবার বলতে অনুরোধ করবে বা দুইটা অপশন দিয়ে জিজ্ঞেস করবে।
-- আজকের তারিখ ও সময় (Asia/Dhaka): {now_dhaka}। শুক্রবার ক্লিনিক বন্ধ।
-```
-
-The worker injects `{now_dhaka}` and the clinic facts at session start. Silence handling: after ~6 s of user silence re-prompt ("হ্যালো, আপনি কি শুনতে পাচ্ছেন?"); after the second silence, say a polite goodbye and `end_call`. Hard cap: 5 minutes (protects free-tier quotas).
-
-**Example opening (our own, not the brief's):** "আসসালামু আলাইকুম, ওয়ান স্মাইল ডেন্টাল থেকে নীলা বলছি। বলুন, আপনাকে কীভাবে সাহায্য করতে পারি?"
-
----
-
-## 8. Landing page + 3D hero (`apps/web`)
-
-**Sections (Bangla default, EN toggle persisted in `localStorage`, dictionary in `src/i18n/{bn,en}.ts`):**
-1. **Hero:** headline (bn) "আপনার ক্লিনিকের ফোন, ২৪ ঘণ্টা বাংলায়", sub-line on missed calls and after-hours bookings, a large **"বাংলা কলারের সাথে কথা বলুন / Talk to our Bangla caller"** button, and the 3D orb.
-2. **Problem → solution:** missed calls, after-hours, manual booking, receptionist load, unstructured info (one card each with the fix).
-3. **How it works:** Call → AI understands Bangla and books → staff see everything in the portal.
-4. **Features:** natural Bangla and code-switching · phone/date capture with read-back · double-booking safe · human handover · live portal.
-5. **Use cases:** dental clinics · diagnostic centres · hospital OPD serials · reminder/confirmation calls.
-6. **Portal preview:** screenshot or animated mock of the call detail page, with a link to the portal.
-7. **Contact / demo request form** (stores into a `leads` table or just a `mailto:`; keep it simple).
-8. Footer.
-
-**3D orb, "easy to load":**
-- React Three Fiber plus a custom shader material: an icosahedron (detail 5–6) with simplex-noise vertex displacement, fresnel glow, and a particle ring (~1.5k points). **No GLB/textures to download.**
-- The orb **is the call UI**. State → uniforms: `idle` (slow breathing, brand teal) → `connecting` (faster spin and pulse) → `listening` (displacement driven by **mic volume**) → `speaking` (driven by **agent audio track volume** via `useTrackVolume` from `@livekit/components-react`) → `ended` (settles, colour fades).
-- Below the orb: **live captions** (agent + caller, latest 2 lines) and **tool chips** ("ডাক্তারের সময় দেখছি…", "অ্যাপয়েন্টমেন্ট বুক হয়েছে ✓"), fed from the agent over a LiveKit data channel / RPC.
-- Performance: a static CSS radial-gradient "poster" orb renders on first paint (LCP). The canvas loads with `next/dynamic({ ssr:false })` after `requestIdleCallback`, `dpr={[1, 1.5]}`, `frameloop` paused when offscreen (IntersectionObserver), and a `prefers-reduced-motion` or no-WebGL fallback to the poster. Target **Lighthouse mobile ≥ 90**.
-
-**Call widget states and errors (each with a bilingual message):** `idle` → `requesting_mic` → `connecting` → `live` (timer + mute + end) → `ended` (short summary + "portal-এ দেখুন" link). Errors: mic permission denied (per-browser how-to-enable tip) · no input device · token/agent unavailable (retry button) · network drop/reconnecting · call cap reached · unsupported browser.
-
----
-
-## 9. Portal (`apps/web/src/app/(portal)/portal/...`)
-
-- `/login`: Supabase email/password. Middleware protects `/portal/*`.
-- `/portal`: overview KPIs (calls today/7d, booked %, after-hours %, avg duration, open callbacks) and a mini chart.
-- `/portal/calls`: table with date, time, caller name, phone, duration, status/outcome badges and a **LIVE** pill for in-progress calls. Search by name or phone, filter by outcome/status/date range, paginate. Realtime inserts.
-- `/portal/calls/[id]`: extracted-fields card (each field with a ✓ valid / ⚠ check badge and confidence) · **transcript** (speaker bubbles, `mm:ss` timestamps, bn with an EN toggle, interrupted marker) · tool-event timeline · latency stats · bn/en summary · linked appointment and callback · recording player (if available) · **Reprocess** button.
-- `/portal/appointments`: upcoming list by doctor and day.
-- `/portal/callbacks`: queue with mark-done.
-- `/portal/data-model`: **ERD** (Mermaid rendered) · table-by-table explanation · "how data moves" diagram (§5) · storage facts (Supabase Postgres, Singapore region, RLS, service-role writes only, recordings in a private bucket with signed URLs).
-
----
-
-## 10. Stand-out checklist (what puts this above the other submissions)
-
-- [ ] Audio-reactive **3D orb that is the call interface**, not decoration
-- [ ] **Measured voice-engine bake-off** with a score table in `docs/decisions.md`; engines switchable by env
-- [ ] **Bangladeshi** Bangla (accent and phrasing), code-switching, digit-by-digit read-back
-- [ ] **Double booking impossible at DB level** (gist exclusion constraint)
-- [ ] Bangla digit/phone/date **normalisers with unit tests**
-- [ ] Portal updates **live while the call is happening** (Supabase Realtime)
-- [ ] Per-turn **latency metrics** shown in the portal
-- [ ] **Eval suite** (LiveKit Agents testing + LLM judge): happy-path booking, code-switch, Bangla-digit phone, medical-advice refusal, reschedule, cancel, silence, emergency. Results table in the README.
-- [ ] Data Model page in the portal (the brief calls the schema "first-class")
-- [ ] Bilingual landing (bn default) and Lighthouse ≥ 90 on mobile
-- [ ] Honest "Known limitations & next steps" section (telephony via SIP, recordings, multi-clinic tenancy, PII retention policy)
-
----
-
-## 11. Timeline (BST, UTC+6)
-
-| When | Phase | Definition of done |
-|---|---|---|
-| Wed 4 Nov, evening | **P0** accounts, keys, repo, **bake-off** | Engine chosen and logged; repo on GitHub |
-| Wed night | **P1** schema + seed + agent skeleton | Agent speaks Bangla in the playground; tables exist in Supabase |
-| Thu 5 Nov, 08:00–12:00 | **P2** tools, validators, persistence, finalize | A real call writes calls/turns/appointments/extraction; pytest green |
-| Thu 12:00–15:00 | **P3** landing + orb + call widget | Hero button completes a call in the browser locally |
-| Thu 15:00–18:00 | **P4** portal | Login → list → detail → data-model pages working |
-| Thu 18:00–20:00 | **P5** deploy all + 3–5 real test calls + evals | Success path passes on the **public URLs** |
-| Thu 20:00–21:30 | **P6** README, video, email draft | All 4 links verified logged-out; email drafted for the user to send |
-
-**Cut-line if behind (drop in this order):** recordings → extra bake-off engines → overview KPIs chart → appointments/callbacks pages → evals beyond 3 scenarios. **Never drop** the end-to-end success path, the transcript view or the data-model page.
-
----
-
-## 12. Progress checklist (RESUME HERE)
-
-> Rules for every session: work top to bottom, tick `[x]` as soon as an item is done, and add a line to the **Session log**. Record any deviation from this plan in `docs/decisions.md`.
-
-### P-1 Planning
-- [x] Read the brief PDF and the HR email; capture requirements (§1)
-- [x] Choose architecture and stack (§2); write this playbook and `CLAUDE.md`
-
-### P0 Setup & bake-off
-- [ ] `git init`; create GitHub repo `bytevoice-bangla` (private; add reviewers later, or make public at submission)
-- [ ] Create the monorepo skeleton (§13 commands), `.gitignore`, `.env.example` files
-- [ ] Accounts and keys ready (§13): Supabase (Singapore), LiveKit Cloud, Google AI Studio, Azure Speech (F0), Vercel; OpenAI optional
-- [ ] Minimal agent worker running locally, joinable from the LiveKit Agents Playground
-- [ ] Bake-off of the 3 Azure-voiced engines with the test script; scores written to `docs/decisions.md`; `VOICE_ENGINE` default set
-
-### P1 Data + agent skeleton
-- [ ] Supabase project linked; migration `init_schema` applied; RLS + realtime publication
-- [ ] `seed.sql` applied (clinic, doctors, services, schedules); reviewer user created
-- [ ] Agent persona prompt (§7) loaded with clinic facts and `now_dhaka`
-- [ ] `calls` row created on session start; turns persisted live
-
-### P2 Tools, validation, extraction
-- [ ] `normalize/` digits, phone, dates, names, plus pytest (≥ 25 cases incl. Bangla digits, double/triple, Friday, past dates)
-- [ ] Repository layer `apps/agent/src/agent/repositories/` (calls, patients, appointments, callbacks, events)
-- [ ] Tools from §5 implemented with confirmation gate and exclusion-violation handling
-- [ ] Silence re-prompt, 5-min cap, end_call flow
-- [ ] FastAPI `/health`, `/calls/{id}/finalize`, `/calls/{id}/reprocess`; Gemini JSON-schema extraction + bn/en summary + per-turn translation
-- [ ] Per-turn latency events
-- [ ] End-to-end local call writes everything correctly
-
-### P3 Landing + 3D hero + call widget
-- [ ] Next.js app, Tailwind, shadcn/ui, fonts (Hind Siliguri / Noto Sans Bengali + Inter), bn/en dictionary + toggle
-- [ ] `/api/livekit/token` route (rate limit, TTL, agent dispatch, room name `call-<uuid>`)
-- [ ] Orb: poster fallback → lazy R3F canvas → state/volume-driven uniforms
-- [ ] Call widget states + all error states (§8); live captions + tool chips via data channel
-- [ ] Remaining sections (problem, how it works, features, use cases, portal preview, contact, footer); responsive check at 375/768/1440
-
-### P4 Portal
-- [ ] Supabase SSR auth, middleware, login page
-- [ ] Calls list with search/filter/pagination + realtime LIVE pill
-- [ ] Call detail (fields + badges, transcript bn/en, events, latency, summary, appointment, callback, reprocess)
-- [ ] Appointments + callbacks pages
-- [ ] Overview KPIs
-- [ ] Data Model page (ERD + explanations + flow)
-
-### P5 Deploy & data
-- [ ] Vercel deploy of `apps/web` (env vars set in Vercel only)
-- [ ] Agent deploy to LiveKit Cloud (`lk agent deploy`), or Render fallback + uptime ping; secrets set in the platform
-- [ ] FastAPI reachable from the agent; CORS locked to the Vercel domain
-- [ ] 3–5 real test calls on production (booking, reschedule, enquiry, medical decline → callback, silence/incomplete) to pre-load the portal
-- [ ] Eval suite run; results table pasted into the README
-- [ ] Lighthouse mobile run; screenshot saved to `docs/`
-
-### P6 Docs, video, submission
-- [ ] Move the playbook to `docs/BUILD_PLAYBOOK.md`; write the reviewer-facing README (§15)
-- [ ] Record the full-screen video (§14), ≤ 3:00; plus a longer uncut walkthrough as a backup
-- [ ] Verify all 4 links logged out / incognito; give the reviewers repo access
-- [ ] Draft the submission email for the user to review and send (§15)
-
-### Session log
-| Date (BST) | Account / session | Done | Next | Blockers |
-|---|---|---|---|---|
-| 2026-11-04 | Planning session | Brief digested; playbook + CLAUDE.md written | P0 setup & bake-off | Need API keys / accounts |
-
----
-
-## 13. Setup, accounts & commands
-
-**Accounts / keys (never commit values; `.env.example` lists names only):**
-
-| Service | Used for | Env vars | Where the secret lives |
-|---|---|---|---|
-| Supabase (region **Southeast Asia, Singapore**) | DB, Auth, Realtime, Storage | `SUPABASE_URL`, `SUPABASE_ANON_KEY` (web), `SUPABASE_SERVICE_ROLE_KEY` (agent only) | Vercel env (anon only) / agent platform secrets |
-| LiveKit Cloud | WebRTC rooms, agent hosting | `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` | Vercel env (token route) / LiveKit agent secrets |
-| Google AI Studio | Gemini Live + Gemini 2.5 Flash | `GOOGLE_API_KEY` | Agent secrets only |
-| OpenAI (optional) | Realtime fallback | `OPENAI_API_KEY` | Agent secrets only |
-| Azure Speech (**required**, free F0, region Southeast Asia) | Bangladeshi `bn-BD` voice + STT | `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION` | Agent secrets only |
-| Vercel | Web hosting | (none) | (none) |
-| Render (fallback) | Agent/FastAPI hosting | (same as agent) | Render env |
-
-Agent extra env: `VOICE_ENGINE`, `AGENT_NAME=bytevoice-bn`, `FINALIZE_API_URL`, `INTERNAL_API_TOKEN` (shared secret between the worker and FastAPI), `MAX_CALL_SECONDS=300`, `CLINIC_ID`.
-
-**Target repo layout:**
-```
-bytevoice-bangla/
-├─ apps/
-│  ├─ web/                    Next.js 15 (landing, call widget, portal, /api/livekit/token)
-│  │  └─ src/{app,components,lib,i18n,constants,types}/
-│  └─ agent/                  Python 3.12 (uv)
-│     ├─ src/agent/
-│     │  ├─ worker.py         LiveKit entrypoint, engine factory
-│     │  ├─ prompts/          persona + clinic facts template
-│     │  ├─ tools/            function tools (§5)
-│     │  ├─ normalize/        digits, phone, dates, names (§6)
-│     │  ├─ repositories/     all DB access
-│     │  ├─ schemas/          pydantic DTOs (tool args, extraction schema)
-│     │  ├─ constants.py
-│     │  └─ api/              FastAPI app (health, finalize, reprocess)
-│     ├─ tests/               pytest (normalisers, tools with fake repo)
-│     └─ evals/               LiveKit Agents test scenarios + judge
-├─ supabase/{migrations,seed.sql,config.toml}
-├─ docs/{architecture.md,data-model.md,decisions.md,video-script.md,eval-report.md}
-├─ CLAUDE.md
-└─ README.md
-```
-
-**Bootstrap commands (verify versions with Context7 / official docs before running):**
-```bash
-# repo
-git init && gh repo create bytevoice-bangla --private --source . --push
-
-# web
-pnpm create next-app@latest apps/web --ts --tailwind --eslint --app --src-dir --import-alias "@/*"
-cd apps/web && pnpm add three @react-three/fiber @react-three/drei livekit-client @livekit/components-react livekit-server-sdk @supabase/supabase-js @supabase/ssr zod mermaid && pnpm add -D @types/three
-pnpm dlx shadcn@latest init
-
-# agent
-cd apps/agent && uv init --package --name agent --python 3.12
-uv add "livekit-agents[google,openai,azure,silero,turn-detector]" fastapi uvicorn pydantic supabase python-dateutil
-uv add --dev pytest pytest-asyncio ruff
-uv run python -m agent.worker download-files
-uv run python -m agent.worker dev          # local worker, connects to LiveKit Cloud
-
-# database
-supabase init && supabase link --project-ref <ref>
-supabase migration new init_schema           # paste §4 SQL
-supabase db push && supabase db reset --linked   # reset only before real data exists
-
-# deploy
-vercel --cwd apps/web                        # set env vars in the Vercel dashboard
-lk cloud auth && lk agent create apps/agent  # then: lk agent deploy
-```
-
-**Coding conventions (from the owner's global rules):** DTOs/pydantic models for every request body and tool arg (never `any`); types in `types/` or `schemas/`; fixed values in `constants`; try/except (try/catch) in every handler and tool with structured logging (`logger.debug`, never `print` or `console.log`); full-word identifiers; all DB access through the repository layer; production-only comments (no ticket notes, TODOs or narration).
-
----
-
-## 14. Full-screen recording of the whole web app (video deliverable)
-
-**Setup:** macOS `Cmd+Shift+5` → *Record Entire Screen* at 1080p, or **OBS** (Display Capture + Mic + desktop audio via BlackHole, so the agent's Bangla voice is audible). Chrome in full screen with a clean profile (no bookmarks or extensions), Do Not Disturb on, cursor highlight on. Wear headphones with a mic so the agent's voice doesn't echo into your mic and trigger false barge-ins.
-
-**Shot list (≤ 3:00, rehearse twice from `docs/video-script.md`):**
-| Time | Shot |
+| | Link |
 |---|---|
-| 0:00–0:25 | Landing hero: orb breathing, value prop, bn → en toggle, quick scroll through the sections, mobile view (DevTools device mode) |
-| 0:25–1:55 | Click **Talk to our Bangla caller** → mic prompt → connecting → live. Full Bangla booking: name confirm, phone digit-by-digit read-back, code-switch ("scaling"), "আগামী রবিবার সন্ধ্যা", one interruption, one medical question politely declined + callback, summary, end |
-| 1:55–2:40 | Portal login → the call is already at the top (LIVE → completed) → call detail: extracted fields with validation badges, transcript with timestamps, tool timeline + latency, appointment created, callback queued |
-| 2:40–3:00 | Data Model page (ERD) + one-sentence architecture + "what's next" |
+| Landing page (talk to Nila) | https://bytevoice-bangla.vercel.app |
+| Staff portal | https://bytevoice-bangla.vercel.app/portal (reviewer login in the submission email) |
+| Video (≤ 3 min, narrated by Nila in Bangla) | `<VIDEO_URL>` |
+| Repository | https://github.com/Rifat024/bytevoice-bangla |
 
-**Also:** record a longer **uncut walkthrough** of every page and error state (mic denied, agent unavailable) as a backup link in the README. Optional: `apps/web/e2e/walkthrough.spec.ts` (Playwright `video: 'on'`) for a silent automated tour and README screenshots.
+## Try it in 90 seconds
 
-**Upload:** YouTube (Unlisted) or Google Drive ("anyone with the link"). **Test the link in an incognito window.**
+1. Open the landing page, press **বাংলা কলারের সাথে কথা বলুন / Talk to our Bangla caller** and allow the microphone (headphones help).
+2. Book a check-up in Bangla, for example: "আসসালামু আলাইকুম, দাঁতে ব্যথা, appointment নিতে চাই" → give a name → give a number the way people do ("জিরো ওয়ান সেভেন ডাবল পাঁচ …") → "আগামী রবিবার সন্ধ্যায়". Nila reads the number back digit by digit and the full booking before confirming.
+3. Try to break it: ask "কোন ওষুধ খাবো?", "ডাক্তারের বাসার ঠিকানা দেন", or ask about someone else's appointment. Interrupt her mid-sentence. Stay silent.
+4. Hang up, log in to the portal: the call is at the top with the transcript, validated fields, tool timeline, latency and the guardrails that fired. Call again with the same name and number and Nila remembers the previous call.
 
----
+## Architecture
 
-## 15. Submission
-
-**Reviewer-facing README (replaces this file at P6):** title + one-line pitch · 4 live links + reviewer login · 90-second "how to try it" · architecture diagram · tech choices & **why** (bake-off table) · data model (ERD + table guide) · call → storage flow · validation approach (Bangla digits, phone, dates) · eval results · security & secrets handling · local setup · **known limitations & next steps** (honest) · credits.
-
-**Email (draft only; the user sends it):**
 ```
-To: hr@strategybyte.com.au
-Subject: AI Engineer Task Submission: Rifat Bin Siraj
-
-Hi StrategyByte team,
-
-Please find my submission for the AI Engineer task below.
-
-1. Landing page: <url>
-2. Back-end portal: <url>   Reviewer login: <email> / <password>
-3. GitHub repository: <url>  (access granted to <emails>, or public)
-4. Video overview (≤3 min): <url>
-
-Stack in one line: Next.js + LiveKit (WebRTC) + Python LiveKit Agents with <engine> for
-Bangla speech, Supabase Postgres (Singapore) for storage, deployed on Vercel and <agent host>.
-Known limitations are listed honestly in the README.
-
-Thank you,
-Rifat Bin Siraj
+Browser (Next.js 16 on Vercel)
+  landing + 3D orb call UI ──WebRTC audio──► LiveKit Cloud ◄── Python agent worker (LiveKit Agents 1.8)
+  portal (Supabase Auth + Realtime)             (rooms)          Gemini Live (bn-BD, voice "Kore")
+        │  POST /api/livekit/token                                 10 function tools → validators
+        │  (rate-limited, 10-min token, dispatches the agent)      live transcript / events / latency
+        ▼                                                          post-call Gemini extraction
+Supabase Postgres (Singapore) ◄──────── service-role writes ───────┘
+  RLS on every table · Realtime on calls / transcript_turns / call_events
 ```
+
+**Why these providers**
+- **Gemini Live with `language="bn-BD"`** (free): one model hears, reasons and speaks Bangladeshi Bangla, with native barge-in and tool calling; first audio ≈ 1.6 s in probes. 2.5 native-audio models reject `bn-BD`; Azure's `bn-BD` voices needed a paid account. A switchable `gemini_pipeline` engine (Gemini STT → Flash → Gemini TTS) is kept for comparison (`VOICE_ENGINE`).
+- **LiveKit Agents**: production WebRTC, VAD, interruption handling and transcription streams; the engine swaps in one line.
+- **Supabase in Singapore** (closest region to Dhaka): real Postgres constraints, Auth for the portal and Realtime so the portal updates while the call is happening.
+- **Next.js on Vercel**: one deploy for the landing page and the authenticated portal.
+
+Full decision log with alternatives: [`docs/decisions.md`](docs/decisions.md).
+
+## How a call becomes data
+
+1. The CTA calls `/api/livekit/token`, which creates room `call-<uuid>` and dispatches agent `bytevoice-bn`.
+2. The agent loads the clinic catalogue from Postgres (fees, doctors, chamber hours) into the persona, inserts a `calls` row and tells the browser its `call_id`.
+3. Every final utterance is written to `transcript_turns` with its offset; per-turn latency and every tool call/result go to `call_events`. The portal subscribes via Realtime.
+4. Tools validate before writing: `patients` upsert (phone as E.164), `appointments` (a GiST exclusion constraint makes double booking impossible), `callback_requests`.
+5. At hang-up the worker runs Gemini 2.5 Flash with a JSON schema over the transcript → `call_extractions`, bn/en summaries, English translation per turn and the final `outcome`. Validators re-check every field; data written by tools wins over the model and disagreements are flagged in `confidence`. Staff can re-run this with **Reprocess**.
+
+Schema, ERD and access rules: [`docs/data-model.md`](docs/data-model.md) (also rendered in the portal at `/portal/data-model`).
+
+## The receptionist
+
+- **Flow:** greet → name (read back) → phone (validated, read back digit by digit) → reason → preferred day/time ("আগামী রবিবার সন্ধ্যা" resolved in Asia/Dhaka) → up to three real free slots → full read-back → book only on an explicit yes → summary → goodbye.
+- **Validation** (`apps/agent/src/agent/normalize/`): Bangla numerals and spoken digit words in both languages, "ডাবল/ট্রিপল", `+880/880/0` prefixes, operator prefixes 013–019; relative dates (আজ, কাল, পরশু, আগামী/এই/পরের সপ্তাহের <বার>, ১০ তারিখ, ১৫ ডিসেম্বর), time words (সকাল … রাত, সাড়ে/সোয়া/পৌনে ৫টা); Fridays, past dates and >60 days rejected.
+- **Safety:** no medicine, dose or diagnosis (offers a doctor callback); emergencies → hospital or 999; facts only from the database.
+- **Privacy:** doctors' and staff's personal numbers, home addresses and family are never stored or shared; another patient's appointments are never revealed, not even when the caller offers that person's number; `find_appointments` and `recall_caller_history` require the caller's own name **and** number and give the same answer for "unknown number" and "wrong name", so they cannot be used to discover who is a patient. Prompt-injection and off-topic requests are declined politely. Every probe is logged as a guardrail event, and agent speech is scanned for phone numbers that are neither the caller's nor the clinic's.
+- **Follow-up calls:** after the name + number check, Nila loads that caller's last three call summaries, open callbacks and upcoming appointments and continues from there.
+- **Turn-taking:** silence → "হ্যালো, শুনতে পাচ্ছেন?" then a polite goodbye; 5-minute cap; a 25 ms fade removes the click at the end of each utterance.
+
+## Quality
+
+- `apps/agent`: **97 unit tests** (`uv run pytest`): normalisers, booking/availability rules, double booking, confirmation gate, privacy (no enumeration), caller memory, extraction validation, guardrail detectors.
+- **Conversation evals** (`uv run python -m evals.run_evals`): the production prompt and tools on Gemini with an in-memory clinic and an LLM judge, 11 scenarios: booking with code-switching, bad phone recovery, medical-advice refusal, doctor's private info, other patient's privacy, prompt injection, off-topic, emergency, English caller, reschedule, returning caller. Latest run: **11/11 passed** on `gemini-3.8-flash` (the text sibling of the Live model); transcripts in [`docs/eval-report.md`](docs/eval-report.md).
+- `apps/web`: `pnpm lint`, `pnpm build`, strict TypeScript; zod at every boundary.
+
+## Bring your own Gemini key
+
+Under the call button, "Test with your own Gemini API key" lets a reviewer call Nila on their own quota. A key is **only accepted after it passes a live test**: the server checks that it can reach Nila's voice model (`gemini-3.8-live`) and that a one-token generation succeeds, and reports invalid keys, missing model access or exhausted quota in Bangla and English. The token route re-tests the key before every call (cached for 10 minutes by its SHA-256 hash), so the browser cannot skip the test. The key stays in that tab's session storage, is sealed with AES-256-GCM (key derived from `INTERNAL_API_TOKEN`, shared only by the web server and the agent) before it goes into LiveKit dispatch metadata, and the agent uses it for that one call's voice session and post-call extraction. It is never stored or logged; the call's timeline records only that a visitor key was used.
+
+## Security and secrets
+
+No secrets in the repo (`.env*` ignored; `.env.example` files list names only). The browser only ever has the Supabase anon key and a 10-minute LiveKit token. RLS: `anon` may only insert leads; `authenticated` staff read everything and may update only callback status; the agent writes with the service-role key server-side. The reprocess API requires a shared bearer token and a logged-in portal user.
+
+## Run locally
+
+```bash
+# agent (Python 3.13, uv)
+cd apps/agent && cp .env.example .env.local   # fill in keys
+uv sync && uv run python -m agent.worker download-files
+uv run python -m agent.worker dev              # or: console (talk through your Mac mic)
+uv run uvicorn agent.api.app:app --port 8000   # reprocess API
+
+# web (Node 22+, pnpm)
+cd apps/web && cp .env.example .env.local && pnpm install && pnpm dev
+```
+
+Database: `supabase/migrations/` and `supabase/seed.sql`. Agent container: `apps/agent/Dockerfile` (`agent.serve` runs the worker and the API together). Video: `scripts/video/make_video.py` renders the narrated walkthrough (Nila's TTS voice over Playwright recordings).
+
+## Known limitations and next steps
+
+- Browser calls only; real phone numbers need LiveKit SIP + a Bangladeshi trunk, which would also give caller ID for instant recognition.
+- Text-mode evals exercise dialogue policy and tools, not speech recognition; accent and ASR accuracy were judged by listening (see `docs/decisions.md`).
+- Recordings are not stored yet (the schema has `recording_path`; plan: LiveKit egress to a private bucket with signed URLs and a retention policy).
+- Single clinic; multi-tenant needs `clinic_id` scoping in RLS policies and per-clinic agent config.
+- Identity on a voice call is name + number, which is reasonable for appointment changes but not for medical records; anything sensitive goes to a staff callback.
+- Free tiers: Gemini rate limits and the Supabase free project pausing after a week idle.
+
+Build notes and the original plan: [`docs/BUILD_PLAYBOOK.md`](docs/BUILD_PLAYBOOK.md).

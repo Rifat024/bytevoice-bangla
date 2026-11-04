@@ -1,58 +1,58 @@
 import logging
 
-from google.genai.types import Modality
-from livekit.agents import AgentSession, inference
-from livekit.plugins import azure, google, openai, silero
+from google.genai import types
+from livekit.agents import NOT_GIVEN, AgentSession
+from livekit.plugins import google, silero
 
 from agent.config import AgentSettings
-from agent.constants import LOGGER_NAME, SPEECH_PHRASE_HINTS, VoiceEngine
+from agent.constants import (
+    BANGLADESH_LANGUAGE_CODE,
+    BANGLADESHI_ACCENT_INSTRUCTIONS,
+    LOGGER_NAME,
+    RECOGNITION_LANGUAGE_CODES,
+    SPEECH_PHRASE_HINTS,
+    VoiceEngine,
+)
 
 logger = logging.getLogger(LOGGER_NAME)
 
 
-def _bangladeshi_voice(settings: AgentSettings) -> azure.TTS:
-    return azure.TTS(voice=settings.azure_tts_voice, language=settings.azure_tts_language)
-
-
-def _openai_realtime(settings: AgentSettings, modalities: list[str]):
-    if settings.openai_realtime_model.startswith("openai/"):
-        return inference.RealtimeModel(model=settings.openai_realtime_model, modalities=modalities)
-    return openai.realtime.RealtimeModel(
-        model=settings.openai_realtime_model, voice=settings.openai_voice, modalities=modalities
-    )
-
-
-def build_session(settings: AgentSettings) -> AgentSession:
+def build_session(settings: AgentSettings, api_key: str | None = None) -> AgentSession:
     engine = settings.voice_engine
+    key = api_key if api_key else NOT_GIVEN
     logger.debug("building agent session", extra={"voice_engine": engine.value})
 
-    if engine is VoiceEngine.AZURE_PIPELINE:
+    if engine is VoiceEngine.GEMINI_LIVE:
         return AgentSession(
+            user_away_timeout=settings.user_away_timeout_seconds,
+            llm=google.realtime.RealtimeModel(
+                model=settings.gemini_live_model,
+                api_key=key,
+                voice=settings.gemini_live_voice,
+                language=BANGLADESH_LANGUAGE_CODE,
+                temperature=0.6,
+                input_audio_transcription=types.AudioTranscriptionConfig(),
+                output_audio_transcription=types.AudioTranscriptionConfig(),
+            ),
+        )
+
+    if engine is VoiceEngine.GEMINI_PIPELINE:
+        return AgentSession(
+            user_away_timeout=settings.user_away_timeout_seconds,
             vad=silero.VAD.load(),
-            stt=azure.STT(language=settings.azure_stt_languages, phrase_list=SPEECH_PHRASE_HINTS),
-            llm=google.LLM(model=settings.pipeline_llm_model, temperature=0.6),
-            tts=_bangladeshi_voice(settings),
-        )
-
-    if engine is VoiceEngine.GEMINI_HYBRID:
-        return AgentSession(
-            llm=google.realtime.RealtimeModel(
-                model=settings.gemini_hybrid_model, modalities=[Modality.TEXT], temperature=0.6
+            stt=google.beta.GeminiSTT(
+                model=settings.pipeline_stt_model,
+                api_key=key,
+                language_codes=RECOGNITION_LANGUAGE_CODES,
+                custom_vocabulary=SPEECH_PHRASE_HINTS,
             ),
-            tts=_bangladeshi_voice(settings),
-        )
-
-    if engine is VoiceEngine.OPENAI_HYBRID:
-        return AgentSession(llm=_openai_realtime(settings, ["text"]), tts=_bangladeshi_voice(settings))
-
-    if engine is VoiceEngine.GEMINI_NATIVE:
-        return AgentSession(
-            llm=google.realtime.RealtimeModel(
-                model=settings.gemini_native_model, voice=settings.gemini_voice, temperature=0.7
+            llm=google.LLM(model=settings.pipeline_llm_model, temperature=0.6, api_key=key),
+            tts=google.beta.GeminiTTS(
+                model=settings.pipeline_tts_model,
+                api_key=key,
+                voice_name=settings.pipeline_tts_voice,
+                instructions=BANGLADESHI_ACCENT_INSTRUCTIONS,
             ),
         )
-
-    if engine is VoiceEngine.OPENAI_NATIVE:
-        return AgentSession(llm=_openai_realtime(settings, ["text", "audio"]))
 
     raise ValueError(f"Unsupported voice engine: {engine}")
