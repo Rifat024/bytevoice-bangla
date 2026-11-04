@@ -5,14 +5,24 @@ CLINIC_TIMEZONE = ZoneInfo("Asia/Dhaka")
 LOGGER_NAME = "bytevoice.agent"
 AGENT_DISPLAY_NAME = "Nila"
 
+BANGLADESH_LANGUAGE_CODE = "bn-BD"
+RECOGNITION_LANGUAGE_CODES = ["bn-BD", "en-US"]
+
+FADE_OUT_SECONDS = 0.025
+TRAILING_SILENCE_SECONDS = 0.15
+
 
 class VoiceEngine(StrEnum):
-    AZURE_PIPELINE = "azure_pipeline"
-    GEMINI_HYBRID = "gemini_hybrid"
-    OPENAI_HYBRID = "openai_hybrid"
-    GEMINI_NATIVE = "gemini_native"
-    OPENAI_NATIVE = "openai_native"
+    GEMINI_LIVE = "gemini_live"
+    GEMINI_PIPELINE = "gemini_pipeline"
 
+
+BANGLADESHI_ACCENT_INSTRUCTIONS = (
+    "Speak as a warm, polite young female receptionist from Dhaka, Bangladesh. Use natural everyday "
+    "Bangladeshi Bangla with a standard Dhaka accent, never a Kolkata or West Bengal accent. "
+    "Calm, friendly, clear, at a natural phone-call pace. Pronounce English loanwords the way Bangladeshi "
+    "people do. Read phone digits slowly, one by one."
+)
 
 SPEECH_PHRASE_HINTS = [
     "ওয়ান স্মাইল ডেন্টাল",

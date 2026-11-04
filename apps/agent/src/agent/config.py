@@ -8,21 +8,17 @@ from agent.constants import VoiceEngine
 class AgentSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=(".env", ".env.local"), extra="ignore")
 
-    voice_engine: VoiceEngine = VoiceEngine.AZURE_PIPELINE
+    voice_engine: VoiceEngine = VoiceEngine.GEMINI_LIVE
     agent_name: str = "bytevoice-bn"
     max_call_seconds: int = 300
 
-    gemini_native_model: str = "gemini-2.5-flash-native-audio-preview-12-2025"
-    gemini_hybrid_model: str = "gemini-live-2.5-flash-preview"
-    gemini_voice: str = "Aoede"
+    gemini_live_model: str = "gemini-3.8-live"
+    gemini_live_voice: str = "Kore"
 
-    openai_realtime_model: str = "openai/gpt-realtime"
-    openai_voice: str = "marin"
-
-    azure_stt_languages: list[str] = ["bn-BD", "en-US"]
-    azure_tts_voice: str = "bn-BD-NabanitaNeural"
-    azure_tts_language: str = "bn-BD"
+    pipeline_stt_model: str = "gemini-3.5-transcribe-live"
     pipeline_llm_model: str = "gemini-2.5-flash"
+    pipeline_tts_model: str = "gemini-3.8-flash-tts"
+    pipeline_tts_voice: str = "Aoede"
 
 
 @lru_cache

@@ -57,8 +57,8 @@ StrategyByte (an Australian company, product **ByteVoice**) is launching in Bang
         │                         ┌────────────────────▼─────────────────────┐
         │                         │ apps/agent  (Python 3.12)                │
         │                         │  • livekit-agents 1.x worker             │
-        │                         │    VOICE_ENGINE = azure_pipeline |       │
-        │                         │      gemini_hybrid | openai_hybrid       │
+        │                         │    VOICE_ENGINE = gemini_live |          │
+        │                         │                   gemini_pipeline        │
         │                         │  • function tools → validators           │
         │                         │  • live persistence (turns, events)      │
         │                         │  • FastAPI: /health, post-call           │
@@ -75,30 +75,31 @@ StrategyByte (an Australian company, product **ByteVoice**) is launching in Bang
 
 **Why this stack (keep these lines for the README and the interview):**
 - **LiveKit Agents (Python):** production-grade WebRTC, VAD and interruption handling, turn detection, transcription events and function tools. The LLM/voice engine swaps with one line, which makes the bake-off cheap and the "provider choice" story concrete. ByteVoice-class products are built this way.
-- **Azure Neural TTS `bn-BD` voice (fixed):** the only major provider with Bangladesh-locale neural voices, so the caller sounds local rather than Kolkata. Azure STT `bn-BD` + `en-US` multi-language recognition handles code-switching.
-- **Gemini (2.5 Flash or Live) as the brain:** strong Bangla understanding and tool calling, free in Google AI Studio. Chosen per the bake-off.
+- **Gemini 3.8 Live with `language="bn-BD"`:** one free model hears, thinks and speaks Bangladeshi Bangla, with built-in interruption handling and tool calling. Fallback `gemini_pipeline` (Gemini STT → Flash → Gemini TTS with a Dhaka-accent instruction) is also free on the same key.
 - **Python agent server:** the AI-engineering depth lives here: tools, validators, extraction, evals.
 - **Supabase in Singapore:** managed Postgres with real constraints, Auth for the portal login, and Realtime so the portal updates **while the call is happening**. Singapore is the nearest region to Dhaka.
 - **Next.js on Vercel:** one deploy for the landing page and the portal, with server components for authenticated portal reads.
 
 ---
 
-## 3. Phase 0: Voice-engine bake-off (30–45 min, do this first)
+## 3. Phase 0: Voice engine (Gemini only, free)
 
-**Hard requirement from the owner: the agent must speak native Bangladeshi Bangla, not Indian/Kolkata Bangla.**
-So the **output voice is fixed**: Azure Neural TTS with the Bangladesh locale, `bn-BD-NabanitaNeural` (female, default) or `bn-BD-PradeepNeural` (male). The bake-off only chooses the **"ears + brain"** (speech understanding and the LLM). Native-audio realtime voices (Gemini/OpenAI) are kept only as a comparison, because their Bangla accent is generic or West-Bengal-leaning.
+**Owner requirements:** native **Bangladeshi** Bangla (not Indian/Kolkata), and **free tools only**. Azure Speech needs a paid/card-verified account and was dropped; edge-tts (unofficial) failed with HTTP 503 on first use and was rejected as unreliable.
 
-Engines are implemented in `apps/agent/src/agent/engines.py` and switched with `VOICE_ENGINE`:
+**Finding (probed 4 Nov with the free AI Studio key):** `gemini-3.8-live` and `gemini-3.1-flash-live-preview` accept the **`bn-BD` (Bangladesh) language code** with native audio output; `gemini-2.5-flash-native-audio-*` rejects `bn-BD`. No Live model allows TEXT-only output, so a "Live brain + separate TTS" hybrid is not possible. First audio ≈ 1.6 s (including connection setup) in text-prompted probes.
+
+Engines in `apps/agent/src/agent/engines.py`, switched with `VOICE_ENGINE`:
 
 | `VOICE_ENGINE` | Ears | Brain | Voice | Notes |
 |---|---|---|---|---|
-| `azure_pipeline` **(default)** | Azure STT, languages `["bn-BD","en-US"]` (auto-detects code-switching) + phrase list (doctor names, scaling, root canal…) | Gemini 2.5 Flash | Azure `bn-BD` | Fully Bangladeshi, all free tiers; most control; slightly higher latency |
-| `gemini_hybrid` | Gemini Live (hears audio directly) | Gemini Live, text output | Azure `bn-BD` | Realtime comprehension + BD voice. Needs a **non-native-audio** Live model (`GEMINI_HYBRID_MODEL`); verify the current id |
-| `openai_hybrid` | OpenAI Realtime via LiveKit Inference | same, text output | Azure `bn-BD` | Uses LiveKit Cloud credits, so no OpenAI key needed |
-| `gemini_native` | Gemini Live | Gemini Live | Gemini voice | Comparison only (accent) |
-| `openai_native` | OpenAI Realtime | same | OpenAI voice | Comparison only (accent) |
+| `gemini_live` **(default)** | Gemini 3.8 Live (hears audio directly, `language="bn-BD"`) | same | Gemini Live voice (`GEMINI_LIVE_VOICE`, default `Kore`) | One model: lowest latency, built-in barge-in, input/output transcription on |
+| `gemini_pipeline` | `gemini-3.5-transcribe-live` via `google.beta.GeminiSTT` (`bn-BD` + `en-US`, custom vocabulary) | Gemini 2.5 Flash | `gemini-3.8-flash-tts` with Dhaka-accent `instructions` | More control over voice style; higher latency (VAD + 3 hops) |
 
-**Fastest way to test (no LiveKit needed):** `cd apps/agent && VOICE_ENGINE=<engine> uv run python -m agent.worker console` talks through your Mac mic and speakers (use headphones). **Or** run `... agent.worker dev`, then talk to it from https://agents-playground.livekit.io (sign in with LiveKit Cloud and pick the project; the agent name is `bytevoice-bn`, so use explicit dispatch in the playground settings).
+**End-of-turn click fix:** generated audio stops mid-waveform, which is heard as a click. `agent/audio/smoothing.py` holds back one frame and fades the last 25 ms, then adds 150 ms of silence. It is applied to both the realtime output node and the TTS node (unit-tested in `tests/test_audio_smoothing.py`).
+
+**Voice samples** (Kore / Leda / Aoede on 3.8 Live; Aoede / Leda on 3.8 Flash TTS) were sent to the owner to pick the most Dhaka-sounding voice; record the pick in `docs/decisions.md`.
+
+**How to try it (no LiveKit needed):** `cd apps/agent && uv run python -m agent.worker console` talks through your Mac mic and speakers (use headphones). Switch with `VOICE_ENGINE=gemini_pipeline uv run python -m agent.worker console`.
 
 **Test script (speak it; log the scores in `docs/decisions.md`):**
 1. "আসসালামু আলাইকুম, আমি একটা appointment নিতে চাই, দাঁতে খুব ব্যথা।"
@@ -109,9 +110,7 @@ Engines are implemented in `apps/agent/src/agent/engines.py` and switched with `
 6. "এই ব্যথার জন্য কোন ওষুধ খাবো?" → expect a polite decline plus a callback offer.
 7. Stay silent for 10 s.
 
-**Score 1–5 on each:** sounds Bangladeshi · natural colloquial phrasing · understood code-switching · digit accuracy · understood the names (রুহান, তাহমিনা) · first-audio latency (target < 1.2 s) · barge-in smoothness.
-
-**Decision rule:** highest total among the three Azure-voiced engines, with ties broken by latency. Record the result and set the default in `.env`.
+**Score 1–5 on each:** sounds Bangladeshi · natural phrasing · code-switching · digit accuracy · names (রুহান, তাহমিনা) · first-audio latency · barge-in smoothness. Keep `gemini_live` unless `gemini_pipeline` is clearly more Bangladeshi-sounding.
 
 ## 4. Data model (first-class deliverable)
 
@@ -399,10 +398,12 @@ The worker injects `{now_dhaka}` and the clinic facts at session start. Silence 
 ### P0 Setup & bake-off
 - [x] `git init`; create GitHub repo `bytevoice-bangla` (private; add reviewers later, or make public at submission): https://github.com/Rifat024/bytevoice-bangla
 - [x] Create the monorepo skeleton (§13 commands), `.gitignore`, `.env.example` files (agent done; `apps/web` is created in P3)
-- [ ] Accounts and keys ready (§13): Supabase (Singapore), LiveKit Cloud, Google AI Studio, Azure Speech (F0), Vercel; OpenAI optional
+- [ ] Accounts and keys ready (§13): Supabase (Singapore), LiveKit Cloud, Google AI Studio, Vercel (all free tiers)
 - [x] Minimal agent worker (`apps/agent/src/agent/worker.py`, engines in `engines.py`, persona in `prompts/persona.py`); CLI verified, silero files downloaded
-- [ ] Owner creates `apps/agent/.env.local` from `.env.example` (git-ignored) with Google + Azure keys; smoke-test `uv run python -m agent.worker console`
-- [ ] Bake-off of the 3 Azure-voiced engines with the test script; scores written to `docs/decisions.md`; `VOICE_ENGINE` default set
+- [x] Owner created `apps/agent/.env.local` (git-ignored) with the Google key; key verified with Gemini text and Live calls
+- [x] Voice engine settled on Gemini only (Azure needs payment); `bn-BD` support verified on 3.8 Live; end-of-turn click fixed + tested
+- [ ] Owner picks the Live voice from samples (Kore / Leda / Aoede) and smoke-tests `uv run python -m agent.worker console`
+- [ ] Run the §3 test script on `gemini_live` (and `gemini_pipeline` if accent is off); scores written to `docs/decisions.md`
 
 ### P1 Data + agent skeleton
 - [ ] Supabase project linked; migration `init_schema` applied; RLS + realtime publication
@@ -452,7 +453,8 @@ The worker injects `{now_dhaka}` and the clinic facts at session start. Silence 
 | Date (BST) | Account / session | Done | Next | Blockers |
 |---|---|---|---|---|
 | 2026-11-04 | Planning session | Brief digested; playbook + CLAUDE.md written | P0 setup & bake-off | Need API keys / accounts |
-| 2026-11-04 | Planning session (P0) | Tools installed (uv, pnpm, supabase, lk); agent scaffold with 5 engines; voice fixed to Azure `bn-BD` (owner wants native Bangladeshi voice); clinic switched to One Smile Dental (demo values); private repo pushed | Owner adds keys to `apps/agent/.env.local` → console smoke test → bake-off | Google AI Studio key, Azure Speech F0 key, LiveKit Cloud project |
+| 2026-11-04 | Planning session (P0) | Tools installed (uv, pnpm, supabase, lk); agent scaffold; clinic switched to One Smile Dental (demo values); private repo pushed | Owner adds keys → smoke test | Keys |
+| 2026-11-04 | Planning session (P0, voice) | Azure dropped (needs payment); Gemini-only engines `gemini_live` (3.8 Live, `bn-BD`) and `gemini_pipeline`; voice samples sent; fade-out click fix with tests; prompt tuned (digit read-back in words, no gendered address, callback offer, Dhaka accent) | Owner picks voice + console smoke test → P1 (Supabase schema) | LiveKit Cloud + Supabase projects not created yet |
 
 ---
 
@@ -466,7 +468,6 @@ The worker injects `{now_dhaka}` and the clinic facts at session start. Silence 
 | LiveKit Cloud | WebRTC rooms, agent hosting | `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` | Vercel env (token route) / LiveKit agent secrets |
 | Google AI Studio | Gemini Live + Gemini 2.5 Flash | `GOOGLE_API_KEY` | Agent secrets only |
 | OpenAI (optional) | Realtime fallback | `OPENAI_API_KEY` | Agent secrets only |
-| Azure Speech (**required**, free F0, region Southeast Asia) | Bangladeshi `bn-BD` voice + STT | `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION` | Agent secrets only |
 | Vercel | Web hosting | (none) | (none) |
 | Render (fallback) | Agent/FastAPI hosting | (same as agent) | Render env |
 
@@ -508,7 +509,7 @@ pnpm dlx shadcn@latest init
 
 # agent
 cd apps/agent && uv init --package --name agent --python 3.12
-uv add "livekit-agents[google,openai,azure,silero,turn-detector]" fastapi uvicorn pydantic supabase python-dateutil
+uv add "livekit-agents[google,silero]" numpy fastapi uvicorn pydantic supabase python-dateutil
 uv add --dev pytest pytest-asyncio ruff
 uv run python -m agent.worker download-files
 uv run python -m agent.worker dev          # local worker, connects to LiveKit Cloud
