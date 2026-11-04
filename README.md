@@ -85,7 +85,7 @@ uv run uvicorn agent.api.app:app --port 8000   # reprocess API
 cd apps/web && cp .env.example .env.local && pnpm install && pnpm dev
 ```
 
-Database: `supabase/migrations/` and `supabase/seed.sql`. Agent container: `apps/agent/Dockerfile` (`agent.serve` runs the worker and the API together). Video: `scripts/video/make_video.py` renders the narrated walkthrough (Nila's TTS voice over Playwright recordings).
+Database: `supabase/migrations/` and `supabase/seed.sql`. Deploy: `scripts/deploy-web.sh` (Vercel) and `scripts/deploy-agent.sh` (LiveKit Cloud; the Dockerfile runs the voice worker). `agent.serve` runs the worker and the reprocess API together for single-container hosts. Video: `scripts/video/make_video.py` renders the narrated walkthrough (Nila's TTS voice over Playwright recordings).
 
 ## Known limitations and next steps
 
