@@ -324,7 +324,7 @@ The worker injects `{now_dhaka}` and the clinic facts at session start. Silence 
 
 ### P5 Deploy & data
 - [x] Vercel deploy of `apps/web` (env vars set in Vercel only): https://bytevoice-bangla.vercel.app (`scripts/deploy-web.sh`)
-- [ ] Agent deploy to LiveKit Cloud (`lk agent deploy`), or Render fallback + uptime ping; secrets set in the platform
+- [x] Agent deployed to LiveKit Cloud (`scripts/deploy-agent.sh`, agent `CA_CDHEZc8cLbtn`, us-east); only the needed secrets are passed
 - [ ] FastAPI reachable from the agent; CORS locked to the Vercel domain
 - [ ] 3–5 real test calls on production (booking, reschedule, enquiry, medical decline → callback, silence/incomplete) to pre-load the portal
 - [x] Eval suite run (11/11); results linked from the README
