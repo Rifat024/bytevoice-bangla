@@ -114,133 +114,14 @@ Engines in `apps/agent/src/agent/engines.py`, switched with `VOICE_ENGINE`:
 
 ## 4. Data model (first-class deliverable)
 
-File: `supabase/migrations/<ts>_init_schema.sql`. Render an ERD (Mermaid) in `docs/data-model.md` **and** on the portal's Data Model page.
+**Applied 4 Nov 2026** to Supabase project `bytevoice-bangla` (ref `ajxqxqdlgxehhkfokmif`, Singapore, URL `https://ajxqxqdlgxehhkfokmif.supabase.co`).
+- Schema: [`supabase/migrations/20261104073000_init_schema.sql`](supabase/migrations/20261104073000_init_schema.sql)
+- Seed: [`supabase/seed.sql`](supabase/seed.sql)
+- ERD, table guide, access control and validation rules: [`docs/data-model.md`](docs/data-model.md)
 
-```sql
-create extension if not exists btree_gist;
+Compared with the first sketch, the applied schema adds `doctor_services` (which doctor does which service), `leads` (landing-page form), the `call_overview` view (portal list), column-level update rights on callbacks, and FK indexes. `call_events.type` is now `event_type`.
 
-create type call_status    as enum ('in_progress','completed','failed');
-create type call_outcome   as enum ('booked','rescheduled','cancelled','enquiry','follow_up_needed','incomplete','failed');
-create type speaker_role   as enum ('agent','caller');
-create type appt_status    as enum ('booked','rescheduled','cancelled','completed','no_show');
-create type callback_status as enum ('open','in_progress','done');
-
-create table clinics (
-  id uuid primary key default gen_random_uuid(),
-  name_bn text not null, name_en text not null,
-  address_bn text, address_en text, phone text, map_url text,
-  timezone text not null default 'Asia/Dhaka',
-  opening_hours jsonb not null,           -- {"sat":["09:00","21:00"], ... "fri":null}
-  created_at timestamptz not null default now()
-);
-
-create table doctors (
-  id uuid primary key default gen_random_uuid(),
-  clinic_id uuid not null references clinics(id),
-  full_name_bn text not null, full_name_en text not null,
-  specialty_bn text, specialty_en text, active boolean not null default true
-);
-
-create table services (
-  id uuid primary key default gen_random_uuid(),
-  clinic_id uuid not null references clinics(id),
-  code text not null,                     -- 'checkup','scaling','root_canal','filling','extraction','braces_consult'
-  name_bn text not null, name_en text not null,
-  duration_min int not null, fee_bdt int not null,
-  prep_notes_bn text, prep_notes_en text,
-  unique (clinic_id, code)
-);
-
-create table doctor_schedules (
-  id uuid primary key default gen_random_uuid(),
-  doctor_id uuid not null references doctors(id),
-  weekday smallint not null check (weekday between 0 and 6),   -- 0 = Sunday
-  start_time time not null, end_time time not null
-);
-
-create table patients (
-  id uuid primary key default gen_random_uuid(),
-  full_name_bn text, full_name_en text,
-  phone_e164 text unique check (phone_e164 ~ '^\+8801[3-9][0-9]{8}$'),
-  created_at timestamptz not null default now()
-);
-
-create table calls (
-  id uuid primary key default gen_random_uuid(),
-  clinic_id uuid not null references clinics(id),
-  patient_id uuid references patients(id),
-  room_name text unique not null,
-  channel text not null default 'web',
-  engine text not null,
-  started_at timestamptz not null default now(),
-  ended_at timestamptz,
-  duration_s int generated always as (extract(epoch from (ended_at - started_at))::int) stored,
-  status call_status not null default 'in_progress',
-  outcome call_outcome,
-  after_hours boolean not null default false,
-  summary_bn text, summary_en text,
-  recording_path text
-);
-
-create table transcript_turns (
-  id bigserial primary key,
-  call_id uuid not null references calls(id) on delete cascade,
-  seq int not null,
-  speaker speaker_role not null,
-  text_bn text not null,
-  text_en text,
-  offset_ms int not null,
-  interrupted boolean not null default false,
-  unique (call_id, seq)
-);
-
-create table call_extractions (
-  call_id uuid primary key references calls(id) on delete cascade,
-  intent text,                             -- book | reschedule | cancel | enquiry | other
-  patient_name_bn text, patient_name_en text, name_confirmed boolean,
-  phone_spoken_raw text, phone_e164 text, phone_valid boolean,
-  reason_for_visit text, service_code text,
-  preferred_date date, preferred_time_window text,   -- morning | afternoon | evening | HH:MM
-  confidence jsonb,                        -- per-field 0..1
-  extractor_model text, extracted_at timestamptz not null default now()
-);
-
-create table appointments (
-  id uuid primary key default gen_random_uuid(),
-  clinic_id uuid not null references clinics(id),
-  patient_id uuid not null references patients(id),
-  doctor_id uuid not null references doctors(id),
-  service_id uuid not null references services(id),
-  call_id uuid references calls(id),
-  slot tstzrange not null,
-  status appt_status not null default 'booked',
-  created_at timestamptz not null default now(),
-  exclude using gist (doctor_id with =, slot with &&) where (status in ('booked','rescheduled'))
-);
-
-create table callback_requests (
-  id uuid primary key default gen_random_uuid(),
-  call_id uuid not null references calls(id),
-  patient_id uuid references patients(id),
-  reason text not null,
-  priority smallint not null default 2,
-  status callback_status not null default 'open',
-  created_at timestamptz not null default now()
-);
-
-create table call_events (
-  id bigserial primary key,
-  call_id uuid not null references calls(id) on delete cascade,
-  ts timestamptz not null default now(),
-  type text not null,                      -- tool_call | tool_result | error | latency | state
-  payload jsonb not null
-);
-
-create index on calls (started_at desc);
-create index on calls (outcome);
-create index on transcript_turns (call_id, seq);
-create index on appointments (patient_id);
-```
+Fixed IDs for code and env: clinic `a7c1e5d2-1b3f-4c8e-9d20-5e6f7a8b9c01`; doctors `d0c70001-0000-4000-8000-00000000000{1,2,3}` (Ruhan, Nusrat, Rakib); services `5e7f0001-0000-4000-8000-00000000000{1..7}`.
 
 **RLS:** enable on all tables. `authenticated` gets **select** on everything (staff portal). `anon` gets nothing. Only the Python service writes, using the **service-role key** held server-side. Add the tables `calls`, `transcript_turns` and `call_events` to the `supabase_realtime` publication.
 
@@ -407,9 +288,11 @@ The worker injects `{now_dhaka}` and the clinic facts at session start. Silence 
 - [ ] Run the §3 test script on `gemini_live` (and `gemini_pipeline` if accent is off); scores written to `docs/decisions.md`
 
 ### P1 Data + agent skeleton
-- [ ] Supabase project linked; migration `init_schema` applied; RLS + realtime publication
-- [ ] `seed.sql` applied (clinic, doctors, services, schedules); reviewer user created
-- [ ] Agent persona prompt (§7) loaded with clinic facts and `now_dhaka`
+- [x] Supabase project `bytevoice-bangla` created (free, Singapore); migration `init_schema` applied; RLS + realtime publication; security advisor clean
+- [x] `seed.sql` applied (1 clinic, 3 doctors, 7 services, 11 doctor-service links, 13 schedule slots); constraints verified
+- [ ] Reviewer auth user created (Supabase dashboard → Authentication → Add user; password goes only in the submission email)
+- [ ] Owner adds `SUPABASE_SERVICE_ROLE_KEY` (Settings → API Keys → secret key) to `apps/agent/.env.local`
+- [x] Agent persona prompt (§7) loaded with clinic facts and `now_dhaka` (static facts; switch to DB-loaded facts in P2)
 - [ ] `calls` row created on session start; turns persisted live
 
 ### P2 Tools, validation, extraction
