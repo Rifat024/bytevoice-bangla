@@ -402,7 +402,8 @@ The worker injects `{now_dhaka}` and the clinic facts at session start. Silence 
 - [x] Minimal agent worker (`apps/agent/src/agent/worker.py`, engines in `engines.py`, persona in `prompts/persona.py`); CLI verified, silero files downloaded
 - [x] Owner created `apps/agent/.env.local` (git-ignored) with the Google key; key verified with Gemini text and Live calls
 - [x] Voice engine settled on Gemini only (Azure needs payment); `bn-BD` support verified on 3.8 Live; end-of-turn click fixed + tested
-- [ ] Owner picks the Live voice from samples (Kore / Leda / Aoede) and smoke-tests `uv run python -m agent.worker console`
+- [x] Owner picked the Live voice: **Kore**
+- [ ] Owner smoke-tests `uv run python -m agent.worker console` with the §3 script
 - [ ] Run the §3 test script on `gemini_live` (and `gemini_pipeline` if accent is off); scores written to `docs/decisions.md`
 
 ### P1 Data + agent skeleton
