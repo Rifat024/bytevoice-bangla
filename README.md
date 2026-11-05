@@ -8,7 +8,7 @@ Built for the StrategyByte AI Engineer task. Demo clinic: One Smile Dental Loung
 |---|---|
 | Landing page (talk to Nila) | https://bytevoice-bangla.vercel.app |
 | Staff portal | https://bytevoice-bangla.vercel.app/portal (reviewer login in the submission email) |
-| Video (≤ 3 min, narrated by Nila in Bangla) | `<VIDEO_URL>` |
+| Video (≤ 3 min, narrated by Nila in Bangla) | https://drive.google.com/file/d/1eLAMqDfkPj_XJdeIz9zlIhM932S0M3ug/view?usp=drive_link |
 | Repository | https://github.com/Rifat024/bytevoice-bangla |
 
 ## Try it in 90 seconds
